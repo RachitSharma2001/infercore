@@ -1,11 +1,12 @@
 import torch
 import torch.nn as nn
 from transformers import GPT2LMHeadModel 
+import math
 
 
 class GPT2Model:
-    def __init__(self):
-        hf_model = GPT2LMHeadModel.from_pretrained("gpt2")
+    def __init__(self, model_name="gpt2"):
+        hf_model = GPT2LMHeadModel.from_pretrained(model_name)
         # initialize the token embedding layer, which is [vocab_size] x [hidden dimension size]
         self.token_embedding_layer = nn.Embedding(
             hf_model.config.vocab_size,
@@ -35,20 +36,33 @@ class GPT2Model:
 
     # performs forward pass. input is token ids, and output is logits 
     # token ids is array of array, with N arrays (N = batch size) and each array containing tokens corresponding to a prompt
-    def forward(self, token_ids):
+    def forward(self, token_ids, return_intermediates=False):
         # lets say token ids = [ [3, 121, 9] ] (so batch of 1). This produces [ [vector 3 in token embedding layer], [vector 121 in token embedding layer], [vector 9 in token embedding layer]]
         token_embedding = self.token_embedding_layer(token_ids)
         # lets say token ids are [ [3, 121, 9] ]. arange(len([3, 121, 9])) = arange(3) = [0, 1, 2]. This is basically generating positions 0, 1, ... N-1 where N is number of tokens in prompt
         position_embedding_indices = torch.arange(token_ids.shape[1])
-        # grabs the appropriate position vectors. So vectors 0, 1, and 2  
+        # grabs the appropriate position vectors. So vectors 0, 1, and 2
         positional_embedding = self.position_embedding_layer(position_embedding_indices)
-        # adds token and positional embedding results  
+        # adds token and positional embedding results
         x = token_embedding + positional_embedding
+        embeddings = x
+
+        hidden_states = []
         for transformer_block in self.transformer_blocks:
             x = transformer_block(x)
-        x = self.final_layer_norm(x)
-        logits = self.lm_head(x)
-        return logits 
+            hidden_states.append(x)
+
+        final_hidden_states = self.final_layer_norm(x)
+        logits = self.lm_head(final_hidden_states)
+
+        if return_intermediates:
+            return {
+                "embeddings": embeddings,
+                "hidden_states": hidden_states,
+                "final_hidden_states": final_hidden_states,
+                "logits": logits,
+            }
+        return logits
 
 class TransformerBlock(nn.Module):
     def __init__(self, hf_model, block_index_number):
@@ -91,11 +105,14 @@ class Attention(nn.Module):
         )
 
         # Load pretrained Hugging Face weights
+        # HF's GPT-2 uses Conv1D internally, which stores its weight as
+        # [in_features, out_features] -- the transpose of nn.Linear's
+        # [out_features, in_features] -- so it must be transposed on copy.
         with torch.no_grad():
-            self.c_attn.weight.copy_(hf_attention.c_attn.weight)
+            self.c_attn.weight.copy_(hf_attention.c_attn.weight.t())
             self.c_attn.bias.copy_(hf_attention.c_attn.bias)
 
-            self.c_proj.weight.copy_(hf_attention.c_proj.weight)
+            self.c_proj.weight.copy_(hf_attention.c_proj.weight.t())
             self.c_proj.bias.copy_(hf_attention.c_proj.bias)
 
     def forward(self, x):
@@ -188,12 +205,13 @@ class MLP(nn.Module):
             config.n_embd
         )
 
-        # Load pretrained Hugging Face weights
+        # Load pretrained Hugging Face weights (see note on Conv1D transpose
+        # in Attention.__init__)
         with torch.no_grad():
-            self.fc.weight.copy_(hf_mlp.c_fc.weight)
+            self.fc.weight.copy_(hf_mlp.c_fc.weight.t())
             self.fc.bias.copy_(hf_mlp.c_fc.bias)
 
-            self.proj.weight.copy_(hf_mlp.c_proj.weight)
+            self.proj.weight.copy_(hf_mlp.c_proj.weight.t())
             self.proj.bias.copy_(hf_mlp.c_proj.bias)
 
     def forward(self, x):
@@ -202,21 +220,4 @@ class MLP(nn.Module):
         x = self.proj(x)
 
         return x
-
-
-###
-# config.n_embd -> hidden dimension size
-# config.n_positions -> max number of token ("positions") GPT2 can handle
-###
-
-token_embedding = nn.Embedding(
-    config.vocab_size,
-    config.n_embd
-)
-
-
-position_embedding = nn.Embedding(
-    config.n_positions, 
-    config.n_embd
-)
 
