@@ -3,7 +3,7 @@
 import torch
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
-from main import GPT2Model
+from tinygpt2 import GPT2Model
 
 
 MODEL_NAME = "sshleifer/tiny-gpt2"
@@ -69,6 +69,11 @@ def test_gpt2_intermediates():
 
     # =========================================================
     # 3. Create input
+    #
+    # Continuous batching uses a *packed* representation: token_ids,
+    # position_ids, and request_ids are all flat 1D tensors of length
+    # total_tokens -- there is no batch dimension. A single request is
+    # just the degenerate case where every token shares one request id.
     # =========================================================
 
     inputs = tokenizer(
@@ -76,7 +81,16 @@ def test_gpt2_intermediates():
         return_tensors="pt",
     )
 
-    input_ids = inputs["input_ids"]
+    # HF wants a [1, T] batch; our packed model wants a flat [T] tensor.
+    input_ids_2d = inputs["input_ids"]
+    input_ids = input_ids_2d[0]
+
+    seq_len = input_ids.shape[0]
+
+    # every token belongs to the same (only) request
+    request_ids = torch.zeros(seq_len, dtype=torch.long)
+    # positions 0..T-1 for the one packed request
+    position_ids = torch.arange(seq_len)
 
     print("\nInput:")
     print(input_ids)
@@ -88,12 +102,14 @@ def test_gpt2_intermediates():
 
     with torch.no_grad():
         hf_output = hf_model(
-            input_ids,
+            input_ids_2d,
             output_hidden_states=True,
         )
 
-    hf_logits = hf_output.logits
-    hf_hidden_states = hf_output.hidden_states
+    # Squeeze away HF's batch dimension of 1 so shapes line up with our
+    # packed (batch-less) representation.
+    hf_logits = hf_output.logits[0]
+    hf_hidden_states = [hs[0] for hs in hf_output.hidden_states]
 
     # =========================================================
     # 5. Run YOUR model
@@ -102,6 +118,8 @@ def test_gpt2_intermediates():
     with torch.no_grad():
         my_output = my_model.forward(
             input_ids,
+            request_ids,
+            position_ids,
             return_intermediates=True,
         )
 
@@ -139,7 +157,7 @@ def test_gpt2_intermediates():
 
         my_block_output = my_output["hidden_states"][layer_idx]
 
-        hf_block_output = hf_block_outputs[layer_idx]
+        hf_block_output = hf_block_outputs[layer_idx][0]
 
         assert_same(
             f"Transformer block {layer_idx}",
@@ -155,7 +173,7 @@ def test_gpt2_intermediates():
 
     hf_final_hidden = hf_model.transformer.ln_f(
         hf_block_outputs[hf_model.config.n_layer - 1]
-    )
+    )[0]
 
     assert_same(
         "final hidden state",

@@ -2,7 +2,6 @@ import numpy as np
 from models.tiny_gpt2.tinygpt2 import GPT2Model
 import torch
 import time
-from torch.nn.utils.rnn import pad_sequence
 
 
 class Scheduler:
@@ -20,24 +19,48 @@ class Scheduler:
     def step(self):
         requests = self.requests[:self.batch_size]
         print("requests:", len(requests))
-        token_ids = pad_sequence(
+        token_ids = torch.cat(
             [req.current_token_ids for req in requests],
-            batch_first = True,
-            padding_value = 0,
+            dim=0,
         )
-        logits = self.model.forward(token_ids)
+        position_ids = torch.cat(
+            [
+                torch.arange(len(req.current_token_ids), device=req.current_token_ids.device)
+                for req in requests
+            ],
+            dim=0,
+        )
+        request_ids = torch.cat(
+            [
+                torch.full(
+                    (len(req.current_token_ids),),
+                    i,
+                    device=req.current_token_ids.device,
+                    dtype=torch.long,
+                )
+                for i, req in enumerate(requests)
+            ],
+            dim=0,
+        )
+        print(token_ids, position_ids, request_ids)
+        # logits are packed: [total_tokens, vocab], one row per input token
+        # across every request concatenated together (no batch dimension).
+        logits = self.model.forward(token_ids, request_ids, position_ids)
         probs = torch.softmax(logits, dim=-1)
         next_tokens = torch.argmax(probs, dim=-1)
         requests_to_del = []
-        for i, token_seq in enumerate(next_tokens):
-            req = self.requests[i]
-            next_token = token_seq[len(req.current_token_ids)-1]
+        offset = 0
+        for req in requests:
+            request_len = len(req.current_token_ids)
+            # last packed row belonging to this request predicts its next token
+            next_token = next_tokens[offset + request_len - 1]
             if next_token == self.tokenizer.eos_token_id or req.num_response_tokens == self.max_response_tokens:
                 req.request.future.set_result(req.current_token_ids)
                 requests_to_del.append(req)
             else:
-                req.current_token_ids = torch.cat((req.current_token_ids, token_seq[len(req.current_token_ids)-1:len(req.current_token_ids)]))
+                req.current_token_ids = torch.cat((req.current_token_ids, next_token.view(1)))
                 req.num_response_tokens += 1
+            offset += request_len
         for req in requests_to_del:
             self.requests.remove(req)
 

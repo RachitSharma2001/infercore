@@ -34,22 +34,24 @@ class GPT2Model:
             self.final_layer_norm.bias.copy_(hf_model.transformer.ln_f.bias)
 
 
-    # performs forward pass. input is token ids, and output is logits 
-    # token ids is array of array, with N arrays (N = batch size) and each array containing tokens corresponding to a prompt
-    def forward(self, token_ids, return_intermediates=False):
-        # lets say token ids = [ [3, 121, 9] ] (so batch of 1). This produces [ [vector 3 in token embedding layer], [vector 121 in token embedding layer], [vector 9 in token embedding layer]]
+    # performs forward pass for continuous batching. token_ids, request_ids,
+    # and position_ids are all flat 1D tensors of length total_tokens -- the
+    # tokens of every in-flight request packed back-to-back, with no batch
+    # dimension. request_ids says which request each packed token belongs
+    # to; position_ids is that token's position within its own request.
+    def forward(self, token_ids, request_ids, position_ids, return_intermediates=False):
+        # e.g. token_ids = [3, 121, 9]. This produces one row per token id:
+        # [vector 3 in token embedding layer], [vector 121 ...], [vector 9 ...]
         token_embedding = self.token_embedding_layer(token_ids)
-        # lets say token ids are [ [3, 121, 9] ]. arange(len([3, 121, 9])) = arange(3) = [0, 1, 2]. This is basically generating positions 0, 1, ... N-1 where N is number of tokens in prompt
-        position_embedding_indices = torch.arange(token_ids.shape[1])
-        # grabs the appropriate position vectors. So vectors 0, 1, and 2
-        positional_embedding = self.position_embedding_layer(position_embedding_indices)
+        # grabs the appropriate position vector for each packed token
+        positional_embedding = self.position_embedding_layer(position_ids)
         # adds token and positional embedding results
         x = token_embedding + positional_embedding
         embeddings = x
 
         hidden_states = []
         for transformer_block in self.transformer_blocks:
-            x = transformer_block(x)
+            x = transformer_block(x, request_ids)
             hidden_states.append(x)
 
         final_hidden_states = self.final_layer_norm(x)
@@ -78,8 +80,8 @@ class TransformerBlock(nn.Module):
         self.attention = Attention(hf_model.config, hf_model.transformer.h[block_index_number].attn)
         self.mlp = MLP(hf_model.config, hf_model.transformer.h[block_index_number].mlp)
 
-    def forward(self, x):
-        x = x + self.attention(self.layer_norm_1(x))
+    def forward(self, x, request_ids):
+        x = x + self.attention(self.layer_norm_1(x), request_ids)
         x = x + self.mlp(self.layer_norm_2(x))
         return x
 
@@ -115,40 +117,39 @@ class Attention(nn.Module):
             self.c_proj.weight.copy_(hf_attention.c_proj.weight.t())
             self.c_proj.bias.copy_(hf_attention.c_proj.bias)
 
-    def forward(self, x):
-        batch_size, seq_len, _ = x.shape
+    def forward(self, x, request_ids):
+        # x is packed: [total_tokens, C], no batch dimension. total_tokens
+        # is every in-flight request's tokens concatenated back-to-back.
+        total_tokens, _ = x.shape
 
-        # [B, T, C] -> [B, T, 3C]
+        # [T, C] -> [T, 3C]
         qkv = self.c_attn(x)
 
-        # [B, T, 3C] -> three [B, T, C] tensors
+        # [T, 3C] -> three [T, C] tensors
         q, k, v = qkv.split(self.n_embd, dim=-1)
 
-        # [B, T, C] -> [B, num_heads, T, head_dim]
+        # [T, C] -> [num_heads, T, head_dim]
         q = q.view(
-            batch_size,
-            seq_len,
+            total_tokens,
             self.n_head,
             self.head_dim
-        ).transpose(1, 2)
+        ).transpose(0, 1)
 
         k = k.view(
-            batch_size,
-            seq_len,
+            total_tokens,
             self.n_head,
             self.head_dim
-        ).transpose(1, 2)
+        ).transpose(0, 1)
 
         v = v.view(
-            batch_size,
-            seq_len,
+            total_tokens,
             self.n_head,
             self.head_dim
-        ).transpose(1, 2)
+        ).transpose(0, 1)
 
         # Q @ K^T
-        # [B, H, T, D] @ [B, H, D, T]
-        # -> [B, H, T, T]
+        # [H, T, D] @ [H, D, T]
+        # -> [H, T, T]
         attention_scores = q @ k.transpose(-2, -1)
 
         # Scale by sqrt(head_dim)
@@ -157,15 +158,23 @@ class Attention(nn.Module):
         # Causal mask: token i cannot attend to tokens after i
         causal_mask = torch.tril(
             torch.ones(
-                seq_len,
-                seq_len,
+                total_tokens,
+                total_tokens,
                 device=x.device,
                 dtype=torch.bool
             )
         )
 
+        # Block-diagonal mask: token i can only attend to tokens from the
+        # same request. Packing is order-preserving per request, so
+        # combined with the causal mask above this reproduces exactly what
+        # each request would see if it were run through attention alone.
+        same_request_mask = request_ids.unsqueeze(0) == request_ids.unsqueeze(1)
+
+        attention_mask = causal_mask & same_request_mask
+
         attention_scores = attention_scores.masked_fill(
-            ~causal_mask,
+            ~attention_mask,
             float("-inf")
         )
 
@@ -176,14 +185,14 @@ class Attention(nn.Module):
         )
 
         # Weighted sum of values
-        # [B, H, T, T] @ [B, H, T, D]
-        # -> [B, H, T, D]
+        # [H, T, T] @ [H, T, D]
+        # -> [H, T, D]
         y = attention_probs @ v
 
         # Combine attention heads
-        # [B, H, T, D] -> [B, T, H, D] -> [B, T, C]
-        y = y.transpose(1, 2).contiguous()
-        y = y.view(batch_size, seq_len, self.n_embd)
+        # [H, T, D] -> [T, H, D] -> [T, C]
+        y = y.transpose(0, 1).contiguous()
+        y = y.view(total_tokens, self.n_embd)
 
         # Final output projection
         y = self.c_proj(y)

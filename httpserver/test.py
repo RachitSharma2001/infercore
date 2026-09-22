@@ -1,7 +1,7 @@
 import threading
 import time
-import httpserver 
 import requests
+from httpserver.httpserver import Server
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -22,7 +22,7 @@ def post(prompt):
     return response.json()
 
 
-server = httpserver.Server()
+server = Server()
 thread = threading.Thread(
     target=server.run,
     daemon=True,
@@ -42,7 +42,7 @@ with ThreadPoolExecutor(max_workers=10) as executor:
 print(results)
 
 
-# server = httpserver.Server()
+# server = Server()
 # thread = threading.Thread(
 #     target=server.run,
 #     daemon=True,
