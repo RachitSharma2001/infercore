@@ -18,7 +18,7 @@ class Scheduler:
 
     def step(self):
         requests = self.requests[:self.batch_size]
-        print("requests:", len(requests))
+        # print("requests:", len(requests))
         token_ids = torch.cat(
             [req.current_token_ids for req in requests],
             dim=0,
@@ -42,7 +42,7 @@ class Scheduler:
             ],
             dim=0,
         )
-        print(token_ids, position_ids, request_ids)
+        # print(token_ids, position_ids, request_ids)
         # logits are packed: [total_tokens, vocab], one row per input token
         # across every request concatenated together (no batch dimension).
         logits = self.model.forward(token_ids, request_ids, position_ids)

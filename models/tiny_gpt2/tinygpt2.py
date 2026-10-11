@@ -132,15 +132,15 @@ class Attention(nn.Module):
 
         # print("q, k, v: ", q.shape, k.shape, v.shape)
 
-        unique_req_ids, counts = torch.unique(request_ids, return_counts=True)
+        # unique_req_ids, counts = torch.unique(request_ids, return_counts=True)
 
-        print("request ids", request_ids)
+        # print("request ids", request_ids)
 
-        print("unique req ids and counts", unique_req_ids, counts)
+        # print("unique req ids and counts", unique_req_ids, counts)
 
-        for i, unique_req_id in enumerate(unique_req_ids):
-            count = counts[i]
-            
+        # for i, unique_req_id in enumerate(unique_req_ids):
+        #     count = counts[i]
+
 
 
         # [T, C] -> [num_heads, T, head_dim]
@@ -179,7 +179,6 @@ class Attention(nn.Module):
                 dtype=torch.bool
             )
         )
-        # print("causal mask shape: ", causal_mask.shape)
 
         # Block-diagonal mask: token i can only attend to tokens from the
         # same request. Packing is order-preserving per request, so
@@ -187,19 +186,12 @@ class Attention(nn.Module):
         # each request would see if it were run through attention alone.
         same_request_mask = request_ids.unsqueeze(0) == request_ids.unsqueeze(1)
 
-        # print("same request mask: ", same_request_mask.shape)
-
         attention_mask = causal_mask & same_request_mask
-
-        # print("attention mask shape ", attention_mask.shape)
-
-        # print("attention scores shape ", attention_scores.shape)
 
         attention_scores = attention_scores.masked_fill(
             ~attention_mask,
             float("-inf")
         )
-
 
         # Convert scores into probabilities
         attention_probs = torch.softmax(
