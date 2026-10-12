@@ -77,7 +77,7 @@ class TransformerBlock(nn.Module):
         with torch.no_grad():
             self.layer_norm_2.weight.copy_(hf_model.transformer.h[block_index_number].ln_2.weight)    
             self.layer_norm_2.bias.copy_(hf_model.transformer.h[block_index_number].ln_2.bias)     
-        self.attention = Attention(hf_model.config, hf_model.transformer.h[block_index_number].attn)
+        self.attention = Attention(hf_model.config, hf_model.transformer.h[block_index_number].attn, block_index_number)
         self.mlp = MLP(hf_model.config, hf_model.transformer.h[block_index_number].mlp)
 
     def forward(self, x, request_ids):
@@ -87,7 +87,7 @@ class TransformerBlock(nn.Module):
 
 #### This Attention Class is vibe coded ####
 class Attention(nn.Module):
-    def __init__(self, config, hf_attention):
+    def __init__(self, config, hf_attention, block_index_number):
         super().__init__()
 
         self.n_head = config.n_head
@@ -117,6 +117,9 @@ class Attention(nn.Module):
             self.c_proj.weight.copy_(hf_attention.c_proj.weight.t())
             self.c_proj.bias.copy_(hf_attention.c_proj.bias)
 
+        self.kv_cache = KVCache()
+        self.block_index_number = block_index_number
+
     def forward(self, x, request_ids):
         # x is packed: [total_tokens, C], no batch dimension. total_tokens
         # is every in-flight request's tokens concatenated back-to-back.
@@ -128,21 +131,12 @@ class Attention(nn.Module):
         # [T, 3C] -> three [T, C] tensors
         q, k, v = qkv.split(self.n_embd, dim=-1)
 
-        # print("request ids ", request_ids.shape)
+        k, p, new_req_ids = self.kv_cache.prepend_k(request_ids, k)
 
-        # print("q, k, v: ", q.shape, k.shape, v.shape)
+        v, _, _ = self.kv_cache.prepend_v(request_ids, v)
 
-        # unique_req_ids, counts = torch.unique(request_ids, return_counts=True)
-
-        # print("request ids", request_ids)
-
-        # print("unique req ids and counts", unique_req_ids, counts)
-
-        # for i, unique_req_id in enumerate(unique_req_ids):
-        #     count = counts[i]
-
-
-
+        key_ind = torch.arange(len(k))
+        
         # [T, C] -> [num_heads, T, head_dim]
         q = q.view(
             total_tokens,
@@ -151,13 +145,15 @@ class Attention(nn.Module):
         ).transpose(0, 1)
 
         k = k.view(
-            total_tokens,
+            len(k),
             self.n_head,
             self.head_dim
         ).transpose(0, 1)
 
+        # print(k)
+
         v = v.view(
-            total_tokens,
+            len(v),
             self.n_head,
             self.head_dim
         ).transpose(0, 1)
@@ -170,23 +166,30 @@ class Attention(nn.Module):
         # Scale by sqrt(head_dim)
         attention_scores = attention_scores / math.sqrt(self.head_dim)
 
-        # Causal mask: token i cannot attend to tokens after i
-        causal_mask = torch.tril(
-            torch.ones(
-                total_tokens,
-                total_tokens,
-                device=x.device,
-                dtype=torch.bool
-            )
-        )
+        causal_mask = key_ind <= p.reshape(len(p), 1)
+        same_request_mask = request_ids.reshape(len(request_ids), 1) == new_req_ids
+        
 
-        # Block-diagonal mask: token i can only attend to tokens from the
-        # same request. Packing is order-preserving per request, so
-        # combined with the causal mask above this reproduces exactly what
-        # each request would see if it were run through attention alone.
-        same_request_mask = request_ids.unsqueeze(0) == request_ids.unsqueeze(1)
+        # # Causal mask: token i cannot attend to tokens after i
+        # causal_mask = torch.tril(
+        #     torch.ones(
+        #         total_tokens,
+        #         total_tokens,
+        #         device=x.device,
+        #         dtype=torch.bool
+        #     )
+        # )
+
+        # # Block-diagonal mask: token i can only attend to tokens from the
+        # # same request. Packing is order-preserving per request, so
+        # # combined with the causal mask above this reproduces exactly what
+        # # each request would see if it were run through attention alone.
+        # same_request_mask = request_ids.unsqueeze(0) == request_ids.unsqueeze(1)
 
         attention_mask = causal_mask & same_request_mask
+
+        # if self.block_index_number == 0:
+        #     print("attention mask: ", attention_mask)
 
         attention_scores = attention_scores.masked_fill(
             ~attention_mask,
@@ -245,3 +248,67 @@ class MLP(nn.Module):
 
         return x
 
+
+
+class KVCache:
+
+    def __init__(self):
+        self.k_cache = {}
+        self.v_cache = {}
+
+    def set_k_cache(self, k_cache):
+        self.k_cache = k_cache
+
+    def set_v_cache(self, v_cache):
+        self.v_cache = v_cache
+
+    def prepend_k(self, request_ids, k):
+        return self.prepend_generic(request_ids, self.k_cache, k)
+
+    def prepend_v(self, request_ids, v):
+        return self.prepend_generic(request_ids, self.v_cache, v)
+
+    def prepend_generic(self, request_ids, cache, vec):
+        unique_req_ids, counts = torch.unique_consecutive(request_ids, return_counts=True)
+        ksplit = torch.split(vec, counts.tolist())
+        new_k = []
+        ind = 0
+        p = torch.tensor([])
+        new_req_ids = torch.tensor([])
+        for k_piece, unique_req_id in zip(ksplit, unique_req_ids):
+            if unique_req_id.item() not in cache:
+                p = torch.cat((p, torch.arange(len(k_piece))+ind))
+                ind += len(k_piece)
+                new_k.append(k_piece)
+                cache[unique_req_id.item()] = k_piece
+                new_req_ids = torch.cat((new_req_ids, torch.tensor([unique_req_id for _ in range(len(k_piece))])))
+                continue 
+            new_req_ids = torch.cat((new_req_ids, torch.tensor([unique_req_id for _ in range(len(cache[unique_req_id.item()])+1)])))
+            ind += len(cache[unique_req_id.item()]) + 1
+            p = torch.cat((p, torch.tensor([ind-1])))
+            new_k.append(cache[unique_req_id.item()])
+            cache[unique_req_id.item()] = torch.cat((cache[unique_req_id.item()], k_piece))
+            new_k.append(k_piece)
+        return torch.cat(new_k), p, new_req_ids
+    # def prepend_generic(self, request_ids, cache, vec):
+    #     unique_req_ids, counts = torch.unique_consecutive(request_ids, return_counts=True)
+    #     ksplit = torch.split(vec, counts.tolist())
+    #     new_k = []
+    #     ind = 0
+    #     p = torch.tensor([])
+    #     new_req_ids = torch.tensor([])
+    #     for k_piece, unique_req_id in zip(ksplit, unique_req_ids):
+    #         if unique_req_id.item() not in cache:
+    #             p = torch.cat((p, torch.arange(len(k_piece))+ind+1))
+    #             ind += len(k_piece)+1
+    #             new_k.append(k_piece)
+    #             cache[unique_req_id.item()] = k_piece
+    #             new_req_ids = torch.cat((new_req_ids, torch.tensor([unique_req_id for _ in range(len(k_piece))])))
+    #             continue 
+    #         new_req_ids = torch.cat((new_req_ids, torch.tensor([unique_req_id for _ in range(len(cache[unique_req_id.item()])+1)])))
+    #         ind += len(cache[unique_req_id.item()]) 
+    #         p = torch.cat((p, torch.tensor([ind])))
+    #         new_k.append(cache[unique_req_id.item()])
+    #         cache[unique_req_id.item()] = torch.cat((cache[unique_req_id.item()], k_piece))
+    #         new_k.append(k_piece)
+    #     return torch.cat(new_k), p, new_req_ids
