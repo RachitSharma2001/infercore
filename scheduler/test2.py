@@ -24,4 +24,5 @@ def test_scheduler_step(tokenizer, prompts):
 if __name__ == "__main__":
     print("in mian")
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
-    test_scheduler_step(tokenizer, ["What is pizza?", "What continent is United States in?"])  
+    test_scheduler_step(tokenizer, ["What is pizza?"]) 
+    # test_scheduler_step(tokenizer, ["What is pizza?", "What continent is United States in?"])  
