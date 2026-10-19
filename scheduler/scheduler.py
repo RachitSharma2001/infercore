@@ -53,20 +53,20 @@ class Scheduler:
         )
         read_slots = torch.cat(
             [
-                torch.tensor(req.k_read_slots)
+                torch.tensor(req.read_slots)
                 for i, req in enumerate(requests)
             ], 
             dim =0,
         )
         read_offsets = torch.tensor(
             [
-                req.k_read_offsets
+                req.read_offsets
                 for i, req in enumerate(requests)
             ]
         )
         write_slots = torch.cat(
             [
-                torch.tensor(req.k_write_slots)
+                torch.tensor(req.write_slots)
                 for i, req in enumerate(requests)
             ],
             dim=0,
@@ -123,37 +123,29 @@ class SchedulerRequest:
         self.num_response_tokens = 0
         self.is_prefill = True 
         self.request_id = random.randint(1, sys.maxsize)
-        self.k_read_slots = []
-        self.k_read_offsets = 0
-        self.k_write_slots = []
+        self.read_slots = []
+        self.read_offsets = 0
+        self.write_slots = []
         self.v_read_slots = []
         self.v_read_offsets = 0
         self.v_write_slots = []
         self.set_slots(kpool, vpool)
 
     def free_slots(self, kpool, vpool):
-        kpool.free_these_slots(self.k_read_slots + self.k_write_slots)
-        vpool.free_these_slots(self.v_read_slots + self.v_write_slots)
-        self.k_read_slots = []
-        self.k_write_slots = []
-        self.v_read_slots = []
-        self.v_write_slots = []
+        kpool.free_these_slots(self.read_slots + self.write_slots)
+        vpool.free_these_slots(self.read_slots + self.write_slots)
+        self.read_slots = []
+        self.write_slots = []
 
     def set_slots(self, kpool, vpool):
         if self.is_prefill:
-            self.k_read_slots = []
-            self.k_read_offsets = 0
-            self.k_write_slots = kpool.request_slots(len(self.current_token_ids))
-            self.v_read_slots = []
-            self.v_read_offsets = 0
-            self.v_write_slots = vpool.request_slots(len(self.current_token_ids))
+            self.read_slots = []
+            self.read_offsets = 0
+            self.write_slots = kpool.request_slots(len(self.current_token_ids))
         else:
-            self.k_read_slots.extend(self.k_write_slots)
-            self.k_read_offsets = len(self.k_read_slots)
-            self.v_read_slots.extend(self.v_write_slots)
-            self.v_read_offsets = len(self.v_read_slots)
-            self.k_write_slots = kpool.request_slots(1)
-            self.v_write_slots = vpool.request_slots(1)            
+            self.read_slots.extend(self.write_slots)
+            self.read_offsets = len(self.read_slots)
+            self.write_slots = kpool.request_slots(1)          
 
     def get_request_id(self):
         return self.request_id
@@ -179,20 +171,20 @@ class SchedulerRequest:
 # req = Request(tokenizer("Where am i", return_tensors="pt")['input_ids'][0])
 # sReq = SchedulerRequest(req)
 # sReq.set_slots(kpool, vpool)
-# print(sReq.k_read_slots)
-# print(sReq.k_write_slots)
+# print(sReq.read_slots)
+# print(sReq.write_slots)
 # print(sReq.v_read_slots)
 # print(sReq.v_write_slots)
 # sReq.set_to_decode()
 # sReq.set_slots(kpool, vpool)
 # print("-------------------------")
-# print(sReq.k_read_slots)
-# print(sReq.k_write_slots)
+# print(sReq.read_slots)
+# print(sReq.write_slots)
 # print(sReq.v_read_slots)
 # print(sReq.v_write_slots)
 # sReq.free_slots(kpool, vpool)
-# print(sReq.k_read_slots)
-# print(sReq.k_write_slots)
+# print(sReq.read_slots)
+# print(sReq.write_slots)
 # print(sReq.v_read_slots)
 # print(sReq.v_write_slots)
 # print(kpool.free_slots)
