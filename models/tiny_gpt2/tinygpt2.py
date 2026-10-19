@@ -5,7 +5,8 @@ import math
 from kvcache.kvcache import KVCache
 
 class GPT2Model:
-    def __init__(self, model_name="gpt2"):
+
+    def __init__(self, kpool, vpool, model_name="gpt2"):
         hf_model = GPT2LMHeadModel.from_pretrained(model_name)
         # initialize the token embedding layer, which is [vocab_size] x [hidden dimension size]
         self.token_embedding_layer = nn.Embedding(
@@ -22,7 +23,7 @@ class GPT2Model:
             self.token_embedding_layer.weight.copy_(hf_model.transformer.wte.weight)
             self.position_embedding_layer.weight.copy_(hf_model.transformer.wpe.weight)
 
-        self.transformer_blocks = [TransformerBlock(hf_model, i) for i in range(hf_model.config.n_layer)]
+        self.transformer_blocks = [TransformerBlock(hf_model, i, kpool, vpool) for i in range(hf_model.config.n_layer)]
 
         self.lm_head = nn.Linear(hf_model.config.n_embd, hf_model.config.vocab_size, bias=False)
         with torch.no_grad():
@@ -39,7 +40,7 @@ class GPT2Model:
     # tokens of every in-flight request packed back-to-back, with no batch
     # dimension. request_ids says which request each packed token belongs
     # to; position_ids is that token's position within its own request.
-    def forward(self, token_ids, request_ids, position_ids, return_intermediates=False):
+    def forward(self, token_ids, request_ids, position_ids, read_slots, read_offsets, write_slots, return_intermediates=False):
         # e.g. token_ids = [3, 121, 9]. This produces one row per token id:
         # [vector 3 in token embedding layer], [vector 121 ...], [vector 9 ...]
         token_embedding = self.token_embedding_layer(token_ids)
@@ -51,7 +52,7 @@ class GPT2Model:
 
         hidden_states = []
         for transformer_block in self.transformer_blocks:
-            x = transformer_block(x, request_ids)
+            x = transformer_block(x, request_ids, read_slots, read_offsets, write_slots)
             hidden_states.append(x)
 
         final_hidden_states = self.final_layer_norm(x)
@@ -67,7 +68,7 @@ class GPT2Model:
         return logits
 
 class TransformerBlock(nn.Module):
-    def __init__(self, hf_model, block_index_number):
+    def __init__(self, hf_model, block_index_number, kpool, vpool):
         super().__init__()
         self.layer_norm_1 = nn.LayerNorm(hf_model.config.n_embd)
         self.layer_norm_2 = nn.LayerNorm(hf_model.config.n_embd)
@@ -77,18 +78,21 @@ class TransformerBlock(nn.Module):
         with torch.no_grad():
             self.layer_norm_2.weight.copy_(hf_model.transformer.h[block_index_number].ln_2.weight)    
             self.layer_norm_2.bias.copy_(hf_model.transformer.h[block_index_number].ln_2.bias)     
-        self.attention = Attention(hf_model.config, hf_model.transformer.h[block_index_number].attn, block_index_number)
+        self.attention = Attention(hf_model.config, hf_model.transformer.h[block_index_number].attn, block_index_number, kpool, vpool)
         self.mlp = MLP(hf_model.config, hf_model.transformer.h[block_index_number].mlp)
 
-    def forward(self, x, request_ids):
-        x = x + self.attention(self.layer_norm_1(x), request_ids)
+    def forward(self, x, request_ids, read_slots, read_offsets, write_slots):
+        x = x + self.attention(self.layer_norm_1(x), request_ids, read_slots, read_offsets, write_slots)
         x = x + self.mlp(self.layer_norm_2(x))
         return x
 
 #### This Attention Class is vibe coded ####
 class Attention(nn.Module):
-    def __init__(self, config, hf_attention, block_index_number):
+    def __init__(self, config, hf_attention, block_index_number, kpool, vpool):
         super().__init__()
+
+        self.kpool = kpool
+        self.vpool = vpool
 
         self.n_head = config.n_head
         self.n_embd = config.n_embd
@@ -120,7 +124,7 @@ class Attention(nn.Module):
         self.kv_cache = KVCache()
         self.block_index_number = block_index_number
 
-    def forward(self, x, request_ids):
+    def forward(self, x, request_ids, read_slots, read_offsets, write_slots):
         # x is packed: [total_tokens, C], no batch dimension. total_tokens
         # is every in-flight request's tokens concatenated back-to-back.
         total_tokens, _ = x.shape
@@ -131,9 +135,23 @@ class Attention(nn.Module):
         # [T, 3C] -> three [T, C] tensors
         q, k, v = qkv.split(self.n_embd, dim=-1)
 
-        k, p, new_req_ids = self.kv_cache.prepend_k(request_ids, k)
+        # if self.block_index_number == 0:
+        #     print("k: ", k)
+        #     print(k.shape)
 
-        v, _, _ = self.kv_cache.prepend_v(request_ids, v)
+        k, p, new_req_ids = self.kpool.prepend(self.block_index_number, request_ids, read_slots, read_offsets, write_slots, k)
+
+        # if self.block_index_number == 0:
+        #     import time
+        #     print("request ids: ", request_ids)
+        #     print("k: ", k)
+        #     print(k.shape)
+        #     time.sleep(1000)
+
+        v, _, _ = self.vpool.prepend(self.block_index_number, request_ids, read_slots, read_offsets, write_slots, v)
+
+       
+
 
         key_ind = torch.arange(len(k))
         
