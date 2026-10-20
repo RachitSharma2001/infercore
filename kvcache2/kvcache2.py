@@ -25,26 +25,33 @@ class Pool:
 
     # def prepend(self, vec):
 
+    '''
+    Two jobs:
+    - return the new k vector
+    - modify current pool from layer 
+
+    - what is p again?
+    
+    ([], [70, 80], [], [90], [110, 150, 160], [])
+    ([12, 13, 14], [17], [15, 16], [20], [21], [35, 56])
+    (vec1, vec2, vec3, vec4, vec5, vec6)
+
+
+    '''
+
     def prepend(self, layer_num, request_ids, read_slots, read_offsets, write_slots, vec):
         unique_req_ids, counts = torch.unique_consecutive(request_ids, return_counts=True)
-        split = torch.split(vec, counts.tolist())
         read_slots_split = torch.split(read_slots, read_offsets.tolist())
         write_slots_split = torch.split(write_slots, counts.tolist())
-        block_nums = []
-        req_len = []
-        ind = 0 
+
         tot_slots = []
-        for piece, read_slots_piece, write_slots in zip(split, read_slots_split, write_slots_split):
+        req_len = counts + read_offsets
+        block_nums = torch.ones((torch.sum(counts), )) + torch.repeat_interleave(read_offsets, repeats=counts)
+        self.pool_from_layer[layer_num][write_slots] = vec.reshape(len(write_slots), self.num_heads, self.head_dim)
+        for read_slots_piece, write_slots in zip(read_slots_split, write_slots_split):
             tot_slots.extend(read_slots_piece)
             tot_slots.extend(write_slots)
-            self.pool_from_layer[layer_num][write_slots] = piece.reshape(len(write_slots), self.num_heads, self.head_dim)
-            ind += 1 
-            if len(read_slots_piece) == 0:
-                block_nums.extend([1 for _ in range(len(piece))])
-                req_len.append(len(piece))
-            else:
-                block_nums.append(len(read_slots_piece)+1)
-                req_len.append(len(read_slots_piece)+1)
+  
         p = torch.cumsum(torch.tensor(block_nums), dim=0) - 1
         new_req_ids = torch.repeat_interleave(unique_req_ids, repeats=torch.tensor(req_len))
         return self.pool_from_layer[layer_num][torch.tensor(tot_slots)], p, new_req_ids
@@ -89,21 +96,22 @@ class Pool:
 # print(p)
 # print(new_req_ids)
 
-################################
+###############################
 # 1 1 1 0 0 1 1 1 0 1 0 0 0 1 1 1 
-# request_ids = torch.tensor([5, 5, 5, 2, 1, 1, 3, 4, 6, 6])
-# read_slots = torch.tensor([70, 80, 90, 110, 150, 160])
-# read_offsets = torch.tensor([0, 2, 0, 1, 3, 0])
-# write_slots = torch.tensor([12, 13, 14, 17, 15, 16, 20, 21, 35, 56])
+p = Pool(12, 1000, 1, 1)
+request_ids = torch.tensor([5, 5, 5, 2, 1, 1, 3, 4, 6, 6])
+read_slots = torch.tensor([70, 80, 90, 110, 150, 160])
+read_offsets = torch.tensor([0, 2, 0, 1, 3, 0])
+write_slots = torch.tensor([12, 13, 14, 17, 15, 16, 20, 21, 35, 56])
 
-# # 
+# 
 
-# k = torch.ones((10, 1))
+k = torch.ones((10, 1))
 
-# newk, p, new_req_ids = p.prepend(1, request_ids, read_slots, read_offsets, write_slots, k)
-# print(newk)
-# print(p)
-# print(new_req_ids)
+newk, p, new_req_ids = p.prepend(1, request_ids, read_slots, read_offsets, write_slots, k)
+print(newk)
+print(p)
+print(new_req_ids)
 
 # p = Pool(12, 1000, 3, 1)
 # request_ids = torch.tensor([1, 1, 1, 1])
