@@ -27,7 +27,6 @@ class Scheduler:
 
     def step(self):
         requests = self.requests[:self.batch_size]
-        # print("requests:", len(requests))
         token_ids = torch.cat(
             [req.get_token_ids() for req in requests],
             dim=0,
@@ -71,11 +70,6 @@ class Scheduler:
             ],
             dim=0,
         )
-        print("========================================")
-        print("read slots", read_slots)
-        print("read offsets", read_offsets)
-        print("write slots", write_slots)
-
         self.iter += 1
 
         # if self.iter == 3:
@@ -114,7 +108,6 @@ class Scheduler:
                 time.sleep(0.01)
                 continue
             self.step()
-            time.sleep(0.5)
 
 class SchedulerRequest:
     def __init__(self, request, kpool, vpool):
@@ -163,29 +156,3 @@ class SchedulerRequest:
             return  torch.arange(len(self.get_token_ids()), device=self.get_token_ids().device)
         return torch.tensor([len(self.current_token_ids)-1])
 
-# from request import Request 
-# kpool = Pool(3, 5, 10, 60)
-# vpool = Pool(3, 5, 10, 60)
-# from transformers import AutoTokenizer
-# tokenizer = AutoTokenizer.from_pretrained("gpt2")
-# req = Request(tokenizer("Where am i", return_tensors="pt")['input_ids'][0])
-# sReq = SchedulerRequest(req)
-# sReq.set_slots(kpool, vpool)
-# print(sReq.read_slots)
-# print(sReq.write_slots)
-# print(sReq.v_read_slots)
-# print(sReq.v_write_slots)
-# sReq.set_to_decode()
-# sReq.set_slots(kpool, vpool)
-# print("-------------------------")
-# print(sReq.read_slots)
-# print(sReq.write_slots)
-# print(sReq.v_read_slots)
-# print(sReq.v_write_slots)
-# sReq.free_slots(kpool, vpool)
-# print(sReq.read_slots)
-# print(sReq.write_slots)
-# print(sReq.v_read_slots)
-# print(sReq.v_write_slots)
-# print(kpool.free_slots)
-# print(vpool.free_slots)
