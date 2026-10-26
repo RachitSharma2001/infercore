@@ -2,15 +2,15 @@ import numpy as np
 from models.tiny_gpt2.tinygpt2 import GPT2Model
 import torch
 import time
-
 import random
 import sys
-
 from kvcache2 import Pool
+import threading
 
 class Scheduler:
     def __init__(self, tokenizer, batch_size, kv_pool_size):
         self.requests = []
+        self.lock = threading.Lock()
 
         self.gpt2_kpool = Pool(12, kv_pool_size, 12, 64)
         self.gpt2_vpool = Pool(12, kv_pool_size, 12, 64)
@@ -23,10 +23,12 @@ class Scheduler:
 
     def add(self, request):
         req = SchedulerRequest(request, self.gpt2_kpool, self.gpt2_vpool)
-        self.requests.append(req)
+        with self.lock:
+            self.requests.append(req)
 
     def step(self):
-        requests = self.requests[:self.batch_size]
+        with self.lock:
+            requests = self.requests[:self.batch_size]
         token_ids = torch.cat(
             [req.get_token_ids() for req in requests],
             dim=0,
@@ -98,13 +100,15 @@ class Scheduler:
             req.set_slots(self.gpt2_kpool, self.gpt2_vpool)
         for req in requests_to_del:
             req.free_slots(self.gpt2_kpool, self.gpt2_vpool)
-            self.requests.remove(req)
+            with self.lock:
+                self.requests.remove(req)
 
     def process(self):
         while True:
-            if not self.requests:
-                time.sleep(0.01)
-                continue
+            with self.lock:
+                if not self.requests:
+                    time.sleep(0.01)
+                    continue
             self.step()
 
 class SchedulerRequest:
