@@ -17,7 +17,7 @@ class Scheduler:
 
         self.model = GPT2Model(self.gpt2_kpool, self.gpt2_vpool, model_name="gpt2")
         self.tokenizer = tokenizer
-        self.max_response_tokens = 15
+        self.max_response_tokens = 50
         self.batch_size = batch_size
         self.iter = 0
 
@@ -72,12 +72,6 @@ class Scheduler:
         )
         self.iter += 1
 
-        # if self.iter == 3:
-        #     print("no doing")
-        #     time.sleep(1000)
-        # print(token_ids)
-        # print(position_ids)
-        # print(request_ids)
         # logits are packed: [total_tokens, vocab], one row per input token
         # across every request concatenated together (no batch dimension).
         logits = self.model.forward(token_ids, request_ids, position_ids, read_slots, read_offsets, write_slots)
@@ -89,7 +83,11 @@ class Scheduler:
             request_len = len(req.get_token_ids())
             # last packed row belonging to this request predicts its next token
             next_token = next_tokens[offset + request_len - 1]
+
+            req.request.resp_tokens.put(next_token)
+
             if next_token == self.tokenizer.eos_token_id or req.num_response_tokens == self.max_response_tokens:
+                req.request.resp_tokens.put("<eos>")
                 req.request.future.set_result(req.current_token_ids)
                 requests_to_del.append(req)
             else:
