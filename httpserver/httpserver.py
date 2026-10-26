@@ -14,12 +14,12 @@ from typing import AsyncIterator
 app = FastAPI()
 
 class Server:
-    def __init__(self):
+    def __init__(self, batch_size=15, kv_pool_size=1000):
         self.app = FastAPI()
         self.app.get("/v1/models")(self.models)
         self.app.post("/v1/chat/completions")(self.chat_completions)
         self.tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        self.scheduler = Scheduler(self.tokenizer)
+        self.scheduler = Scheduler(self.tokenizer, batch_size, kv_pool_size)
         thread = threading.Thread(
             target=self.scheduler.process,
             daemon=True,

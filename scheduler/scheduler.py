@@ -9,11 +9,11 @@ import sys
 from kvcache2 import Pool
 
 class Scheduler:
-    def __init__(self, tokenizer, batch_size = 3):
+    def __init__(self, tokenizer, batch_size, kv_pool_size):
         self.requests = []
 
-        self.gpt2_kpool = Pool(12, 110, 12, 64)
-        self.gpt2_vpool = Pool(12, 110, 12, 64)
+        self.gpt2_kpool = Pool(12, kv_pool_size, 12, 64)
+        self.gpt2_vpool = Pool(12, kv_pool_size, 12, 64)
 
         self.model = GPT2Model(self.gpt2_kpool, self.gpt2_vpool, model_name="gpt2")
         self.tokenizer = tokenizer
