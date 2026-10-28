@@ -80,7 +80,8 @@ class Scheduler:
         # print(request_ids)
         # logits are packed: [total_tokens, vocab], one row per input token
         # across every request concatenated together (no batch dimension).
-        logits = self.model.forward(token_ids, request_ids, position_ids, read_slots, read_offsets, write_slots)
+        p, new_req_ids, tot_slots = self.gpt2_kpool.compute_metadata(request_ids, read_slots, read_offsets, write_slots)
+        logits = self.model.forward(token_ids, request_ids, position_ids, read_slots, read_offsets, write_slots, p, new_req_ids, tot_slots )
         probs = torch.softmax(logits, dim=-1)
         next_tokens = torch.argmax(probs, dim=-1)
         requests_to_del = []

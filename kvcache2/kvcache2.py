@@ -22,19 +22,24 @@ class Pool:
         self.free_slots = self.free_slots[num_slots:]
         return slots_to_return
 
-    def prepend(self, layer_num, request_ids, read_slots, read_offsets, write_slots, vec):
-        unique_req_ids, counts = torch.unique_consecutive(request_ids, return_counts=True)
-        read_slots_split = torch.split(read_slots, read_offsets.tolist())
-        write_slots_split = torch.split(write_slots, counts.tolist())
+    def compute_metadata(self, request_ids, read_slots, read_offsets, write_slots):
+      unique_req_ids, counts = torch.unique_consecutive(request_ids, return_counts=True)
+      read_slots_split = torch.split(read_slots, read_offsets.tolist())
+      write_slots_split = torch.split(write_slots, counts.tolist())
 
-        tot_slots = []
-        req_len = counts + read_offsets
-        block_nums = torch.ones((torch.sum(counts), )) + torch.repeat_interleave(read_offsets, repeats=counts)
-        self.pool_from_layer[layer_num][write_slots] = vec.reshape(len(write_slots), self.num_heads, self.head_dim)
-        for read_slots_piece, write_slots in zip(read_slots_split, write_slots_split):
-            tot_slots.extend(read_slots_piece)
-            tot_slots.extend(write_slots)
-  
-        p = torch.cumsum(torch.tensor(block_nums), dim=0) - 1
-        new_req_ids = torch.repeat_interleave(unique_req_ids, repeats=torch.tensor(req_len))
-        return self.pool_from_layer[layer_num][torch.tensor(tot_slots)], p, new_req_ids
+      tot_slots = []
+      req_len = counts + read_offsets
+      block_nums = torch.ones((torch.sum(counts), )) + torch.repeat_interleave(read_offsets, repeats=counts)
+      for read_slots_piece, write_slots in zip(read_slots_split, write_slots_split):
+        tot_slots.extend(read_slots_piece)
+        tot_slots.extend(write_slots)
+      
+      p = torch.cumsum(block_nums, dim=0) - 1
+      new_req_ids = torch.repeat_interleave(unique_req_ids, repeats=req_len)
+
+      return p, new_req_ids, torch.tensor(tot_slots)
+
+    def prepend2(self, layer_num, write_slots, tot_slots, vec):
+      self.pool_from_layer[layer_num][write_slots] = vec.reshape(len(write_slots), self.num_heads, self.head_dim)
+      return self.pool_from_layer[layer_num][tot_slots]
+
