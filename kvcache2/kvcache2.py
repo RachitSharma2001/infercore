@@ -39,7 +39,7 @@ class Pool:
 
       return p, new_req_ids, torch.tensor(tot_slots)
 
-    def prepend2(self, layer_num, write_slots, tot_slots, vec):
+    def prepend(self, layer_num, write_slots, tot_slots, vec):
       self.pool_from_layer[layer_num][write_slots] = vec.reshape(len(write_slots), self.num_heads, self.head_dim)
       return self.pool_from_layer[layer_num][tot_slots]
 

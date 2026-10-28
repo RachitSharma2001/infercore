@@ -39,7 +39,7 @@ class GPT2Model:
     # tokens of every in-flight request packed back-to-back, with no batch
     # dimension. request_ids says which request each packed token belongs
     # to; position_ids is that token's position within its own request.
-    def forward(self, token_ids, request_ids, position_ids, read_slots, read_offsets, write_slots, p, new_req_ids, tot_slots, return_intermediates=False):
+    def forward(self, token_ids, request_ids, position_ids, write_slots, p, new_req_ids, tot_slots, return_intermediates=False):
         # e.g. token_ids = [3, 121, 9]. This produces one row per token id:
         # [vector 3 in token embedding layer], [vector 121 ...], [vector 9 ...]
         token_embedding = self.token_embedding_layer(token_ids)
@@ -51,7 +51,7 @@ class GPT2Model:
 
         hidden_states = []
         for transformer_block in self.transformer_blocks:
-            x = transformer_block(x, request_ids, read_slots, read_offsets, write_slots, p, new_req_ids, tot_slots)
+            x = transformer_block(x, request_ids, write_slots, p, new_req_ids, tot_slots)
             hidden_states.append(x)
 
         final_hidden_states = self.final_layer_norm(x)
@@ -80,8 +80,8 @@ class TransformerBlock(nn.Module):
         self.attention = Attention(hf_model.config, hf_model.transformer.h[block_index_number].attn, block_index_number, kpool, vpool)
         self.mlp = MLP(hf_model.config, hf_model.transformer.h[block_index_number].mlp)
 
-    def forward(self, x, request_ids, read_slots, read_offsets, write_slots, p, new_req_ids, tot_slots):
-        x = x + self.attention(self.layer_norm_1(x), request_ids, read_slots, read_offsets, write_slots, p, new_req_ids, tot_slots)
+    def forward(self, x, request_ids, write_slots, p, new_req_ids, tot_slots):
+        x = x + self.attention(self.layer_norm_1(x), request_ids, write_slots, p, new_req_ids, tot_slots)
         x = x + self.mlp(self.layer_norm_2(x))
         return x
 
@@ -122,7 +122,7 @@ class Attention(nn.Module):
 
         self.block_index_number = block_index_number
 
-    def forward(self, x, request_ids, read_slots, read_offsets, write_slots, p, new_req_ids, tot_slots):
+    def forward(self, x, request_ids, write_slots, p, new_req_ids, tot_slots):
         # x is packed: [total_tokens, C], no batch dimension. total_tokens
         # is every in-flight request's tokens concatenated back-to-back.
         total_tokens, _ = x.shape
@@ -133,9 +133,9 @@ class Attention(nn.Module):
         # [T, 3C] -> three [T, C] tensors
         q, k, v = qkv.split(self.n_embd, dim=-1)
 
-        k = self.kpool.prepend2(self.block_index_number, write_slots, tot_slots, k)
+        k = self.kpool.prepend(self.block_index_number, write_slots, tot_slots, k)
 
-        v = self.vpool.prepend2(self.block_index_number, write_slots, tot_slots, v)
+        v = self.vpool.prepend(self.block_index_number, write_slots, tot_slots, v)
 
         key_ind = torch.arange(len(k))
         
