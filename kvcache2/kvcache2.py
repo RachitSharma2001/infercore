@@ -2,16 +2,21 @@ import torch
 
 class Pool:
     def __init__(self, max_layers, max_slots, num_heads, head_dim):
-        m = {}
+        kpool = {}
+        vpool = {}
         for layer in range(max_layers):
-            m[layer] = torch.empty((max_slots, num_heads, head_dim))
-        self.pool_from_layer = m
+            kpool[layer] = torch.empty((max_slots, num_heads, head_dim))
+            vpool[layer] = torch.empty((max_slots, num_heads, head_dim))
+        self.kpool_from_layer = kpool
+        self.vpool_from_layer = vpool
         self.free_slots = [i for i in range(max_slots)]
         self.num_heads = num_heads
         self.head_dim = head_dim
 
-    def set_vector(self, layer_num, slot_num, vec):
-        self.pool_from_layer[layer_num][slot_num] = vec
+    def set_vector(self, layer_num, slot_num, k, v):
+        self.kpool_from_layer[layer_num][slot_num] = k
+        self.vpool_from_layer[layer_num][slot_num] = v
+        
 
     def free_these_slots(self, slot_nums):
         for _, n in enumerate(slot_nums):
@@ -39,7 +44,8 @@ class Pool:
 
       return p, new_req_ids, torch.tensor(tot_slots)
 
-    def prepend(self, layer_num, write_slots, tot_slots, vec):
-      self.pool_from_layer[layer_num][write_slots] = vec.reshape(len(write_slots), self.num_heads, self.head_dim)
-      return self.pool_from_layer[layer_num][tot_slots]
+    def prepend(self, layer_num, write_slots, tot_slots, k, v):
+      self.kpool_from_layer[layer_num][write_slots] = k.reshape(len(write_slots), self.num_heads, self.head_dim)
+      self.vpool_from_layer[layer_num][write_slots] = v.reshape(len(write_slots), self.num_heads, self.head_dim)
+      return self.kpool_from_layer[layer_num][tot_slots], self.vpool_from_layer[layer_num][tot_slots]
 

@@ -5,7 +5,7 @@ import math
 
 class GPT2Model:
 
-    def __init__(self, kpool, vpool, model_name="gpt2"):
+    def __init__(self, kpool, model_name="gpt2"):
         hf_model = GPT2LMHeadModel.from_pretrained(model_name)
         # initialize the token embedding layer, which is [vocab_size] x [hidden dimension size]
         self.token_embedding_layer = nn.Embedding(
@@ -22,7 +22,7 @@ class GPT2Model:
             self.token_embedding_layer.weight.copy_(hf_model.transformer.wte.weight)
             self.position_embedding_layer.weight.copy_(hf_model.transformer.wpe.weight)
 
-        self.transformer_blocks = [TransformerBlock(hf_model, i, kpool, vpool) for i in range(hf_model.config.n_layer)]
+        self.transformer_blocks = [TransformerBlock(hf_model, i, kpool) for i in range(hf_model.config.n_layer)]
 
         self.lm_head = nn.Linear(hf_model.config.n_embd, hf_model.config.vocab_size, bias=False)
         with torch.no_grad():
@@ -67,7 +67,7 @@ class GPT2Model:
         return logits
 
 class TransformerBlock(nn.Module):
-    def __init__(self, hf_model, block_index_number, kpool, vpool):
+    def __init__(self, hf_model, block_index_number, kpool):
         super().__init__()
         self.layer_norm_1 = nn.LayerNorm(hf_model.config.n_embd)
         self.layer_norm_2 = nn.LayerNorm(hf_model.config.n_embd)
@@ -77,7 +77,7 @@ class TransformerBlock(nn.Module):
         with torch.no_grad():
             self.layer_norm_2.weight.copy_(hf_model.transformer.h[block_index_number].ln_2.weight)    
             self.layer_norm_2.bias.copy_(hf_model.transformer.h[block_index_number].ln_2.bias)     
-        self.attention = Attention(hf_model.config, hf_model.transformer.h[block_index_number].attn, block_index_number, kpool, vpool)
+        self.attention = Attention(hf_model.config, hf_model.transformer.h[block_index_number].attn, block_index_number, kpool)
         self.mlp = MLP(hf_model.config, hf_model.transformer.h[block_index_number].mlp)
 
     def forward(self, x, request_ids, write_slots, p, new_req_ids, tot_slots):
@@ -87,11 +87,10 @@ class TransformerBlock(nn.Module):
 
 #### This Attention Class is vibe coded ####
 class Attention(nn.Module):
-    def __init__(self, config, hf_attention, block_index_number, kpool, vpool):
+    def __init__(self, config, hf_attention, block_index_number, kpool):
         super().__init__()
 
         self.kpool = kpool
-        self.vpool = vpool
 
         self.n_head = config.n_head
         self.n_embd = config.n_embd
@@ -133,9 +132,7 @@ class Attention(nn.Module):
         # [T, 3C] -> three [T, C] tensors
         q, k, v = qkv.split(self.n_embd, dim=-1)
 
-        k = self.kpool.prepend(self.block_index_number, write_slots, tot_slots, k)
-
-        v = self.vpool.prepend(self.block_index_number, write_slots, tot_slots, v)
+        k, v = self.kpool.prepend(self.block_index_number, write_slots, tot_slots, k, v)
 
         key_ind = torch.arange(len(k))
         

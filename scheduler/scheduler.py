@@ -13,16 +13,15 @@ class Scheduler:
         self.requests = []
 
         self.gpt2_kpool = Pool(12, 110, 12, 64)
-        self.gpt2_vpool = Pool(12, 110, 12, 64)
 
-        self.model = GPT2Model(self.gpt2_kpool, self.gpt2_vpool, model_name="gpt2")
+        self.model = GPT2Model(self.gpt2_kpool, model_name="gpt2")
         self.tokenizer = tokenizer
         self.max_response_tokens = 15
         self.batch_size = batch_size
         self.iter = 0
 
     def add(self, request):
-        req = SchedulerRequest(request, self.gpt2_kpool, self.gpt2_vpool)
+        req = SchedulerRequest(request, self.gpt2_kpool)
         self.requests.append(req)
 
     def step(self):
@@ -98,9 +97,9 @@ class Scheduler:
                 req.num_response_tokens += 1
             offset += request_len
             req.set_to_decode()
-            req.set_slots(self.gpt2_kpool, self.gpt2_vpool)
+            req.set_slots(self.gpt2_kpool)
         for req in requests_to_del:
-            req.free_slots(self.gpt2_kpool, self.gpt2_vpool)
+            req.free_slots(self.gpt2_kpool)
             self.requests.remove(req)
 
     def process(self):
@@ -111,7 +110,7 @@ class Scheduler:
             self.step()
 
 class SchedulerRequest:
-    def __init__(self, request, kpool, vpool):
+    def __init__(self, request, kpool):
         self.request = request 
         self.current_token_ids = request.token_ids
         self.num_response_tokens = 0
@@ -120,18 +119,14 @@ class SchedulerRequest:
         self.read_slots = []
         self.read_offsets = 0
         self.write_slots = []
-        self.v_read_slots = []
-        self.v_read_offsets = 0
-        self.v_write_slots = []
-        self.set_slots(kpool, vpool)
+        self.set_slots(kpool)
 
-    def free_slots(self, kpool, vpool):
+    def free_slots(self, kpool):
         kpool.free_these_slots(self.read_slots + self.write_slots)
-        vpool.free_these_slots(self.read_slots + self.write_slots)
         self.read_slots = []
         self.write_slots = []
 
-    def set_slots(self, kpool, vpool):
+    def set_slots(self, kpool):
         if self.is_prefill:
             self.read_slots = []
             self.read_offsets = 0
