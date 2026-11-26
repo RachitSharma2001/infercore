@@ -5,7 +5,7 @@ This is a small LLM inference engine I built in order to learn how serving model
 These are the specific components:
 
 - **Model** (`models/`): a from-scratch GPT-2 implementation, with a kv cache
-- **KV cache** (`kvcache2/`): a pre-allocated pool of cache slots that all requests share. Each request grabs slots for its prompt and for the tokens it generates.
+- **KV cache** (`kvcache/`): a pre-allocated pool of cache slots that all requests share. Each request grabs slots for its prompt and for the tokens it generates.
 - **Scheduler** (`scheduler/`): a scheduler that uses continous batching. 
 - **HTTP server** (`httpserver/`): a thin FastAPI wrapper around the scheduler, which runs in a background thread.
 - **Benchmark** (`benchmark/`): measures latency and throughput of the engine. Results are below.

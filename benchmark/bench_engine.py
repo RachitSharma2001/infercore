@@ -25,7 +25,7 @@ from transformers import AutoTokenizer
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from kvcache2 import Pool  # noqa: E402
+from kvcache import Pool  # noqa: E402
 from scheduler.request import Request  # noqa: E402
 from scheduler.scheduler import Scheduler  # noqa: E402
 

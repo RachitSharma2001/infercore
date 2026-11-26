@@ -6,7 +6,7 @@ import time
 import random
 import sys
 
-from kvcache2 import Pool
+from kvcache import Pool
 
 class Scheduler:
     def __init__(self, tokenizer, batch_size = 3):
